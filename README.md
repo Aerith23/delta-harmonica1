@@ -96,3 +96,11 @@ Git 跟踪源码、依赖版本、文档和测试；EXE、录音、曲库、模�
 
 后续计划：音源分离 → 音频转谱 → JSON/MIDI 曲库与演奏 → 独立 LangChain 参数解析服务。
 桌面录音留在 Windows，后续模型服务用于练习 FastAPI 和 Docker 部署。
+
+## 启动时报缺少 pyaudiowpatch
+
+双击 `启动源码.cmd`。该入口固定使用本项目 `.venv/Scripts/python.exe`，无需手动激活环境。
+也可以在本目录执行 `.\.venv\Scripts\python.exe app.py`。
+不要依赖系统默认的 `python` 或直接双击 `.py` 文件，它们可能指向未安装依赖的 Anaconda 环境。
+依赖包名称为 `PyAudioWPatch`，代码导入名称为 `pyaudiowpatch`。
+需要补装时执行 `.\.venv\Scripts\python.exe -m pip install -r requirements.txt`。
