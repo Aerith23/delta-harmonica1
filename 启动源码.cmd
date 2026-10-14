@@ -8,7 +8,7 @@ if not exist "%APP_PYTHON%" (
   pause
   exit /b 1
 )
-"%APP_PYTHON%" -c "import pyaudiowpatch; import tkinter"
+"%APP_PYTHON%" -c "import pyaudiowpatch; import tkinter; import numpy; import scipy; import soundfile; import onnxruntime"
 if errorlevel 1 (
   echo Required packages are missing from the PROJECT environment.
   echo Run this command in the project folder:

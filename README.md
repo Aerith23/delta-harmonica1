@@ -30,7 +30,7 @@
 - 录音先写 `.partial.wav`，正常完成后改为 `.wav`。进程被强制终止时可能留下临时文件。
 - 达到约 3.5 GB 自动停止，避免超过标准 WAV 的大小限制。
 - 输出设备变动后点击“刷新设备”。本版不自动跟随 Windows 中途切换的输出。
-- 此阶段不包含人声分离、音频转谱、游戏演奏或 LangChain。
+- 此阶段包含音频转谱，不包含人声分离、游戏演奏或 LangChain。
 
 ## 代码结构
 
@@ -104,3 +104,28 @@ Git 跟踪源码、依赖版本、文档和测试；EXE、录音、曲库、模�
 不要依赖系统默认的 `python` 或直接双击 `.py` 文件，它们可能指向未安装依赖的 Anaconda 环境。
 依赖包名称为 `PyAudioWPatch`，代码导入名称为 `pyaudiowpatch`。
 需要补装时执行 `.\.venv\Scripts\python.exe -m pip install -r requirements.txt`。
+
+
+## 录音转 JSON
+
+在“已录制文件”列表选择 WAV，点击“转换为 JSON”。后台使用本地 Basic Pitch ONNX 音符模型，界面显示进度，可取消。
+默认“单音简化”根据力度、音区和连续性选择一条声部并截断重叠；“保留所有音符”保留识别出的多音。
+单音简化是启发式处理，不等同于人声分离或保证识别主旋律。复杂完整歌曲可能出现伴奏、错音和漏音，优先使用清晰独奏或器乐录音。
+默认保存到 `曲库/曲谱/录音名称.json`；同名时添加唯一后缀，不覆盖已有曲谱。原 WAV 保留。
+格式与原有 110 首曲谱一致：`harmonica-score-v1`，`pitch` 为 MIDI 整数，`start` / `duration` 为秒，`velocity` 为 1–127，`track` / `channel` 为 0。
+输出保留录音的休止时间和原音高；`studio.auto_adapt` 开启，供后续口琴编排模块适配音域。
+模型随 EXE 打包，本机离线运行，无需登录和上传录音。
+源码开发首次准备模型：`.venv/Scripts/python.exe scripts/setup_model.py`；模型来源和 SHA-256 在 `model-manifest.json`，下载需联网。
+单文件最长 12 分钟。空录音或未识别到音符会给出提示，不保存空曲谱。
+
+模型端到端检查（合成 C4/E4/G4，不播放声音）：`.venv/Scripts/python.exe tests/transcription_smoke.py`。
+模型：[Spotify Basic Pitch](https://github.com/spotify/basic-pitch)，Apache-2.0，许可见 `第三方许可/Spotify-Basic-Pitch-LICENSE.txt`。
+推理、重采样和音符解码封装在 `transcription.py`，后台只通过消息队列更新界面。
+
+## 转谱验证记录
+
+本次版本已通过 16 项单元测试，其中读取并校验全部 110 首已有 JSON。
+界面测试覆盖列表可见、转换期间按钮禁用、完成恢复和取消流程。
+实际 ONNX 模型已将合成的 C4 / E4 / G4 识别为 MIDI 音高 60 / 64 / 67；独立 EXE 同样通过此测试。
+空音频、取消任务不生成曲谱；重复转换不会覆盖此前生成的 JSON。
+合成音测试用于验证端到端链路，不能代表复杂真实混音的识别精度。

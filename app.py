@@ -11,6 +11,7 @@ from tkinter import ttk, filedialog, messagebox
 import winsound
 
 from recorder import Recorder, list_outputs
+from transcription import convert_recording, ConversionCancelled
 
 ROOT = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 BG = "#10151e"
@@ -29,9 +30,9 @@ def clock(seconds):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("口琴助手 · 系统录音")
-        self.geometry("1040x790")
-        self.minsize(900, 710)
+        self.title("口琴助手 · 录音与转谱")
+        self.geometry("1120x760")
+        self.minsize(1060, 730)
         self.configure(bg=BG)
         self.recorder = Recorder()
         self.folder = ROOT / "recordings"
@@ -43,6 +44,13 @@ class App(tk.Tk):
         self.loading = False
         self.session_open = False
         self.last_state = None
+        self.converting = False
+        self.conversion_thread = None
+        self.conversion_cancel = threading.Event()
+        self.score_folder = ROOT / "曲库" / "曲谱"
+        self.last_score = None
+        self.mode_var = tk.StringVar(value="单音简化")
+        self.conversion_text = tk.StringVar(value="选择下方已录制文件，转换为兼容曲库的 JSON。")
         self.threshold = tk.DoubleVar(value=-60)
         self.device_var = tk.StringVar()
         self.threshold_text = tk.StringVar(value="−60 dBFS")
@@ -93,9 +101,17 @@ class App(tk.Tk):
         head.pack(fill="x")
         self.label(head, "HARMONICA  /  口琴助手", 10, ACCENT).pack(anchor="w")
         self.label(head, "把正在播放的声音，留成素材。", 23).pack(anchor="w", pady=(6, 3))
-        self.label(head, "系统录音   /   自动跳过开头静音   /   本地 WAV", 10, MUTED).pack(anchor="w")
+        self.label(head, "系统录音   /   自动跳过开头静音   /   本地音频转谱", 10, MUTED).pack(anchor="w")
 
-        settings = tk.Frame(main, bg=BG)
+        body = tk.Frame(main, bg=BG)
+        body.pack(fill="both", expand=True, pady=(10, 0))
+        left = tk.Frame(body, bg=BG, width=460)
+        left.pack(side="left", fill="y", padx=(0, 20))
+        left.pack_propagate(False)
+        right = tk.Frame(body, bg=BG)
+        right.pack(side="left", fill="both", expand=True)
+
+        settings = tk.Frame(left, bg=BG)
         settings.pack(fill="x", pady=(20, 14))
         self.label(settings, "录音来源", 10, MUTED).grid(row=0, column=0, sticky="w", pady=(0, 5))
         self.combo = ttk.Combobox(settings, textvariable=self.device_var, state="readonly", font=(FONT, 10))
@@ -104,17 +120,17 @@ class App(tk.Tk):
         self.refresh_btn.grid(row=1, column=1)
         settings.columnconfigure(0, weight=1)
 
-        card = tk.Frame(main, bg=PANEL, padx=24, pady=18)
+        card = tk.Frame(left, bg=PANEL, padx=24, pady=18)
         card.pack(fill="x")
         top = tk.Frame(card, bg=PANEL)
         top.pack(fill="x")
         self.label(top, textvariable=self.status_text, size=13, color=ACCENT).pack(side="left")
         self.label(top, "WASAPI  ·  系统输出", 9, MUTED).pack(side="right")
-        self.timer = self.label(card, "00:00", 43)
+        self.timer = self.label(card, "00:00", 36)
         self.timer.pack(pady=(3, 0))
         self.stats = self.label(card, "录制时长 · 等待声音时不计时", 9, MUTED)
         self.stats.pack()
-        self.meter = tk.Canvas(card, bg=PANEL, height=58, highlightthickness=0)
+        self.meter = tk.Canvas(card, bg=PANEL, height=42, highlightthickness=0)
         self.meter.pack(fill="x", pady=(10, 3))
         self.level = self.label(card, "输入电平  —", 9, MUTED)
         self.level.pack()
@@ -126,9 +142,9 @@ class App(tk.Tk):
         self.stop_btn.pack(side="left", padx=6)
         self.stop_btn.configure(state="disabled")
         self.label(card, textvariable=self.detail_text, size=10, color=MUTED,
-                   wraplength=810).pack()
+                   wraplength=410).pack()
 
-        gate = tk.Frame(main, bg=BG)
+        gate = tk.Frame(left, bg=BG)
         gate.pack(fill="x", pady=(12, 8))
         self.label(gate, "起录灵敏度", 10).pack(side="left")
         self.scale = tk.Scale(gate, from_=-80, to=-25, resolution=1, orient="horizontal",
@@ -138,9 +154,9 @@ class App(tk.Tk):
                              command=lambda v: self.threshold_text.set(f"{int(float(v))} dBFS"))
         self.scale.pack(side="left", padx=12)
         self.label(gate, textvariable=self.threshold_text, size=9, color=ACCENT).pack(side="left")
-        self.label(gate, "数值越低，越容易触发；录制开始后保留全部停顿。", 9, MUTED).pack(side="right")
+        self.label(gate, "数值越低，越容易触发。", 9, MUTED).pack(side="right")
 
-        dest = tk.Frame(main, bg=BG)
+        dest = tk.Frame(left, bg=BG)
         dest.pack(fill="x", pady=(0, 10))
         self.label(dest, "保存至", 9, MUTED).pack(side="left", padx=(0, 8))
         self.path_entry = tk.Entry(dest, textvariable=self.path_text, state="readonly", readonlybackground=BG,
@@ -149,25 +165,58 @@ class App(tk.Tk):
         self.folder_btn = self.button(dest, "更改", self.choose_folder)
         self.folder_btn.pack(side="right")
 
-        row = tk.Frame(main, bg=BG)
+        row = tk.Frame(right, bg=BG)
         row.pack(fill="x", pady=(0, 8))
-        self.label(row, "录音素材", 12).pack(side="left")
+        self.label(row, "已录制文件", 12).pack(side="left")
         self.preview_btn = self.button(row, "试听 / 停止", self.preview)
         self.preview_btn.pack(side="right", padx=(6, 0))
         self.open_btn = self.button(row, "打开保存目录", self.open_folder)
         self.open_btn.pack(side="right")
-        self.table = ttk.Treeview(main, columns=("name", "size"), show="headings", selectmode="browse", height=3)
+        self.list_refresh_btn = self.button(row, "刷新列表", self._refresh_files)
+        self.list_refresh_btn.pack(side="right", padx=(0, 6))
+        self.table = ttk.Treeview(right, columns=("name", "duration", "size"), show="headings", selectmode="browse", height=4)
         self.table.heading("name", text="文件名")
         self.table.heading("size", text="大小")
-        self.table.column("name", width=610)
-        self.table.column("size", width=100, anchor="e")
-        self.table.pack(fill="both", expand=True)
+        self.table.heading("duration", text="时长")
+        self.table.column("duration", width=80, anchor="center")
+        self.table.column("name", width=310)
+        self.table.column("size", width=85, anchor="e")
+        list_area = tk.Frame(right, bg=BG)
+        list_area.pack(fill="both", expand=True)
+        self.table.pack(in_=list_area, side="left", fill="both", expand=True)
+        scrollbar = ttk.Scrollbar(list_area, orient="vertical", command=self.table.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.table.configure(yscrollcommand=scrollbar.set)
+        conversion = tk.Frame(right, bg=PANEL, padx=14, pady=10)
+        conversion.pack(fill="x", pady=(10, 0))
+        actions = tk.Frame(conversion, bg=PANEL)
+        actions.pack(fill="x")
+        self.label(actions, "转谱方式", 9, MUTED).pack(side="left", padx=(0, 8))
+        self.mode_combo = ttk.Combobox(actions, textvariable=self.mode_var, values=["单音简化", "保留所有音符"],
+                                       state="readonly", width=14, font=(FONT, 9))
+        self.mode_combo.pack(side="left")
+        buttons = tk.Frame(conversion, bg=PANEL)
+        buttons.pack(fill="x", pady=(7, 0))
+        self.convert_btn = self.button(buttons, "转换为 JSON", self.convert_selected, True)
+        self.convert_btn.pack(side="left", padx=(0, 8))
+        self.cancel_btn = self.button(buttons, "取消转换", self.cancel_conversion)
+        self.cancel_btn.pack(side="left")
+        self.cancel_btn.configure(state="disabled")
+        self.result_btn = self.button(actions, "查看生成曲谱", self.open_result)
+        self.result_btn.pack(side="right")
+        self.result_btn.configure(state="disabled")
+        self.progress = ttk.Progressbar(conversion, maximum=100)
+        self.progress.pack(fill="x", pady=(8, 4))
+        self.label(conversion, textvariable=self.conversion_text, size=9, color=MUTED,
+                   wraplength=440, justify="left").pack(anchor="w")
+        self.label(conversion, "独奏和清晰器乐效果更好；混音可能包含错音。\n单音简化不等同于人声分离。",
+                   9, MUTED, justify="left").pack(anchor="w", pady=(3, 0))
         self.table.bind("<Double-1>", lambda e: self.preview())
         self.label(main, "仅捕获所选设备的电脑输出声音，不使用麦克风。录音完全保存在本机。", 9, MUTED).pack(anchor="w", pady=(9, 0))
         self.previewing = False
 
     def refresh_devices(self):
-        if self.session_open or self.loading:
+        if self.session_open or self.loading or self.converting:
             return
         self.loading = True
         self.refresh_btn.configure(state="disabled")
@@ -184,11 +233,12 @@ class App(tk.Tk):
         self.start_btn.configure(state="disabled" if busy or not self.devices else "normal")
         self.stop_btn.configure(state="normal" if busy else "disabled")
         self.combo.configure(state="disabled" if busy else "readonly")
-        for widget in (self.refresh_btn, self.folder_btn, self.scale, self.preview_btn):
+        for widget in (self.refresh_btn, self.folder_btn, self.scale, self.preview_btn, self.convert_btn, self.list_refresh_btn):
             widget.configure(state="disabled" if busy else "normal")
+        self.mode_combo.configure(state="disabled" if busy else "readonly")
 
     def start(self):
-        if self.session_open or self.loading or self.recorder.busy:
+        if self.session_open or self.loading or self.recorder.busy or self.converting:
             return
         index = self.combo.current()
         if not 0 <= index < len(self.devices):
@@ -210,6 +260,8 @@ class App(tk.Tk):
             self.detail_text.set("正在结束录音并写入 WAV 文件。")
 
     def choose_folder(self):
+        if self.session_open or self.converting:
+            return
         path = filedialog.askdirectory(title="选择录音保存目录", initialdir=str(self.folder if self.folder.exists() else ROOT))
         if path:
             self.folder = Path(path)
@@ -239,13 +291,13 @@ class App(tk.Tk):
         entries = entries[:100]
         self.files = [path for path, _ in entries]
         for i, (path, stat) in enumerate(entries):
-            self.table.insert("", "end", iid=str(i), values=(path.name, f"{stat.st_size / 1048576:.2f} MB"))
+            self.table.insert("", "end", iid=str(i), values=(path.name, self._wav_duration(path), f"{stat.st_size / 1048576:.2f} MB"))
             if str(path) == select:
                 self.table.selection_set(str(i))
                 self.table.see(str(i))
 
     def preview(self):
-        if self.session_open:
+        if self.session_open or self.converting:
             return
         if self.previewing:
             winsound.PlaySound(None, 0)
@@ -259,10 +311,88 @@ class App(tk.Tk):
             except RuntimeError as exc:
                 messagebox.showerror("试听失败", str(exc))
 
+    @staticmethod
+    def _wav_duration(path):
+        import wave
+        try:
+            with wave.open(str(path)) as wav:
+                return clock(wav.getnframes() / wav.getframerate())
+        except (OSError, wave.Error, EOFError):
+            return "—"
+
+    def convert_selected(self):
+        if self.session_open or self.converting or self.closing:
+            return
+        selected = self.table.selection()
+        if not selected:
+            messagebox.showinfo("请选择录音", "先在已录制文件列表中选择一个 WAV 文件。")
+            return
+        source = self.files[int(selected[0])]
+        monophonic = self.mode_var.get() == "单音简化"
+        winsound.PlaySound(None, 0)
+        self.previewing = False
+        self.converting = True
+        self.conversion_cancel.clear()
+        self.progress["value"] = 0
+        self.conversion_text.set("正在准备：" + source.name)
+        self._set_busy(True)
+        self.stop_btn.configure(state="disabled")
+        self.cancel_btn.configure(state="normal")
+        def work():
+            try:
+                result = convert_recording(source, self.score_folder, monophonic,
+                    self.conversion_cancel,
+                    lambda value, message: self.ui_events.put(("conversion_progress", (value, message))))
+                self.ui_events.put(("conversion_finished", result))
+            except ConversionCancelled:
+                self.ui_events.put(("conversion_cancelled", None))
+            except Exception as exc:
+                self.ui_events.put(("conversion_error", str(exc)))
+        self.conversion_thread = threading.Thread(target=work, name="audio-to-score", daemon=True)
+        self.conversion_thread.start()
+
+    def cancel_conversion(self):
+        self.conversion_cancel.set()
+        self.cancel_btn.configure(state="disabled")
+        self.conversion_text.set("正在取消，等待当前识别步骤结束…")
+
+    def open_result(self):
+        if self.last_score and self.last_score.is_file():
+            try:
+                os.startfile(str(self.last_score))
+            except OSError as exc:
+                messagebox.showerror("无法打开曲谱", str(exc))
+
+    def _handle_conversion_event(self, kind, value):
+        if kind == "conversion_progress":
+            if not self.conversion_cancel.is_set():
+                self.progress["value"], message = value
+                self.conversion_text.set(message)
+            return
+        self.converting = False
+        self._set_busy(False)
+        self.cancel_btn.configure(state="disabled")
+        if kind == "conversion_finished":
+            self.last_score = Path(value["path"])
+            self.progress["value"] = 100
+            self.result_btn.configure(state="normal")
+            self.conversion_text.set(f"已生成 {value['notes']} 个音符 · {self.last_score}")
+        elif kind == "conversion_cancelled":
+            self.progress["value"] = 0
+            self.conversion_text.set("转换已取消，原录音保留。")
+        else:
+            self.progress["value"] = 0
+            self.conversion_text.set("转换失败：" + value)
+            if not self.closing:
+                messagebox.showerror("转谱失败", value)
+
     def tick(self):
         try:
             while True:
                 kind, value = self.ui_events.get_nowait()
+                if kind.startswith("conversion_"):
+                    self._handle_conversion_event(kind, value)
+                    continue
                 self.loading = False
                 self.refresh_btn.configure(state="normal")
                 if kind == "devices":
@@ -270,7 +400,7 @@ class App(tk.Tk):
                     self.combo["values"] = [d.name + ("  · 系统默认" if d.default else "") for d in value]
                     if value:
                         self.combo.current(next((i for i, d in enumerate(value) if d.default), 0))
-                        self.start_btn.configure(state="normal")
+                        self.start_btn.configure(state="disabled" if self.converting or self.closing else "normal")
                     else:
                         self.device_var.set("没有找到输出设备")
                         self.detail_text.set("请连接耳机或扬声器，再点击刷新设备。")
@@ -320,22 +450,33 @@ class App(tk.Tk):
         width = max(1, self.meter.winfo_width())
         stride = width / len(self.history)
         for i, level in enumerate(self.history):
-            height = max(2, level * 48)
-            self.meter.create_rectangle(i * stride, 29 - height / 2, i * stride + max(1, stride - 2),
-                                        29 + height / 2, fill=ACCENT if level else "#2a394b", outline="")
-        if self.closing and not self.recorder.busy and not self.loading:
+            height = max(2, level * 36)
+            self.meter.create_rectangle(i * stride, 21 - height / 2, i * stride + max(1, stride - 2),
+                                        21 + height / 2, fill=ACCENT if level else "#2a394b", outline="")
+        if self.closing and not self.recorder.busy and not self.loading and not self.converting:
             self.destroy()
             return
         self.after(80, self.tick)
 
     def close(self):
         self.closing = True
+        if self.converting:
+            self.cancel_conversion()
         winsound.PlaySound(None, 0)
         self.stop()
         self.start_btn.configure(state="disabled")
 
 
 if __name__ == "__main__":
+    # Headless conversion is also useful for integration tests of the frozen EXE.
+    if len(sys.argv) == 4 and sys.argv[1] == "--convert":
+        try:
+            convert_recording(sys.argv[2], sys.argv[3])
+        except Exception:
+            import traceback
+            (ROOT / "transcription-error.log").write_text(traceback.format_exc(), encoding="utf-8")
+            sys.exit(1)
+        sys.exit(0)
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except (AttributeError, OSError):
