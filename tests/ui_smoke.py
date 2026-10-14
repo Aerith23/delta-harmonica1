@@ -15,6 +15,22 @@ with patch('app.list_outputs', return_value=[OutputDevice(0, 'Test Output', 2, 4
         for widget in [ui.table, ui.convert_btn, ui.cancel_btn, ui.progress]:
             assert widget.winfo_height() > 1, (widget, widget.winfo_geometry())
             assert widget.winfo_rooty() + widget.winfo_height() <= ui.winfo_rooty() + ui.winfo_height()
+        # Real rows must be loaded, and their pixels must belong to the table,
+        # not an overlapping sibling frame. Dimensions alone missed this bug.
+        expected = [p for p in ui.folder.glob('*.wav') if not p.name.endswith('.partial.wav')]
+        assert len(ui.table.get_children()) == min(len(expected), 100)
+        assert ui.table.master is ui.nametowidget(ui.table.winfo_parent())
+        assert ui.table.master == ui.table.pack_info()['in']
+        if expected:
+            first = ui.table.get_children()[0]
+            box = ui.table.bbox(first)
+            assert box, 'First recording is not visible'
+            point_x = ui.table.winfo_rootx() + 10
+            point_y = ui.table.winfo_rooty() + box[1] + box[3] // 2
+            assert ui.winfo_containing(point_x, point_y) is ui.table, 'Recording list is covered'
+            assert ui.table.item(first, 'values')[0] == ui.files[0].name
+        assert str(len(ui.files)) in ui.file_status.get()
+        print('RECORDING_LIST_VISIBLE:', len(ui.files))
         ui.withdraw()
         end = time.monotonic() + 2
         while ui.loading and time.monotonic() < end:

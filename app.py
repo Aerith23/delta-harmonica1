@@ -174,16 +174,19 @@ class App(tk.Tk):
         self.open_btn.pack(side="right")
         self.list_refresh_btn = self.button(row, "刷新列表", self._refresh_files)
         self.list_refresh_btn.pack(side="right", padx=(0, 6))
-        self.table = ttk.Treeview(right, columns=("name", "duration", "size"), show="headings", selectmode="browse", height=4)
+        self.file_status = tk.StringVar()
+        self.label(right, textvariable=self.file_status, size=9, color=MUTED,
+                   wraplength=540, justify="left").pack(anchor="w", pady=(0, 8))
+        list_area = tk.Frame(right, bg=BG)
+        list_area.pack(fill="both", expand=True)
+        self.table = ttk.Treeview(list_area, columns=("name", "duration", "size"), show="headings", selectmode="browse", height=4)
         self.table.heading("name", text="文件名")
         self.table.heading("size", text="大小")
         self.table.heading("duration", text="时长")
         self.table.column("duration", width=80, anchor="center")
         self.table.column("name", width=310)
         self.table.column("size", width=85, anchor="e")
-        list_area = tk.Frame(right, bg=BG)
-        list_area.pack(fill="both", expand=True)
-        self.table.pack(in_=list_area, side="left", fill="both", expand=True)
+        self.table.pack(side="left", fill="both", expand=True)
         scrollbar = ttk.Scrollbar(list_area, orient="vertical", command=self.table.yview)
         scrollbar.pack(side="right", fill="y")
         self.table.configure(yscrollcommand=scrollbar.set)
@@ -290,6 +293,8 @@ class App(tk.Tk):
         entries.sort(key=lambda pair: pair[1].st_mtime, reverse=True)
         entries = entries[:100]
         self.files = [path for path, _ in entries]
+        self.file_status.set(f"{len(self.files)} 个已录制文件 · {self.folder}" if self.files else
+                             f"当前目录没有 WAV 录音 · {self.folder}；可更改保存目录或开始录制。")
         for i, (path, stat) in enumerate(entries):
             self.table.insert("", "end", iid=str(i), values=(path.name, self._wav_duration(path), f"{stat.st_size / 1048576:.2f} MB"))
             if str(path) == select:
