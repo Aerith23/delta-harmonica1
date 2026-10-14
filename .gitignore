@@ -18,3 +18,7 @@ dist/
 models/
 recordings/
 tmp/
+*.exe
+*.spec
+*.log
+曲库/
